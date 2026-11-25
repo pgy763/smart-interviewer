@@ -4,7 +4,7 @@
 这个 demo 交付出去要能被别人`git clone` 之后直接跑。如果强依赖 API Key，
 打开就是一片 500，什么也看不到。所以：
 - mock：确定性、零成本、覆盖全部链路（出题/追问/评分/报告/视觉判定）
-- dashscope：真实通义千问（qwen-plus 文本 + qwen-vl-max 视觉 + omni 实时语音）
+- dashscope：真实通义千问（qwen-plus 文本 + qwen3-vl-plus 视觉 + omni 实时语音）
 
 `provider=auto` 时：有 DASHSCOPE_API_KEY 就走真实模型，没有就降级 mock，并在
 报告里**明确标注本次是 mock 数据**（见 report/builder.py 的 provider 字段）——

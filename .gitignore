@@ -10,3 +10,5 @@ tests/_tmp/
 *.y4m
 data/*.txt
 tools/_shot_tmp/
+.idea/
+tmp*
