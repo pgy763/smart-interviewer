@@ -1,0 +1,397 @@
+/* 面试助手前端样式。
+
+设计决策记录（对应本机 modern-web-guidance 的指南）：
+1. `dark-mode`：`:root { color-scheme: light dark }` + `light-dark()`。
+   `color-scheme` 必须放在 `:root`/`html` 上，浏览器才会把滚动条、表单控件
+   一起切成深色；只改背景色不做这一步，深色下滚动条还是白的。
+2. `form-fields-automatically-fit-contents`：答题框用 `field-sizing: content`
+   自动长高。JS 量 scrollHeight 的方案每敲一个字要强制两次重排，而且中文
+   输入法组词时长度为 0 会把框缩成一行再撑开，视觉上跳。
+3. `ime-safe-enter-submit`：Enter 发送 + `e.isComposing || e.keyCode === 229`
+   判组词中。不判这个，中文打字按回车确认候选词会直接把半句话发出去。
+4. 不引前端框架，原生 ES module。这个 demo 要能被面试官 clone 下来直接跑，
+   少一层 node_modules 就少一处"装不上"的风险。
+*/
+
+:root {
+  color-scheme: light dark;
+  --bg: light-dark(#f4f6fa, #0d1015);
+  --panel: light-dark(#ffffff, #161a21);
+  --panel-2: light-dark(#f7f9fc, #1b2028);
+  --border: light-dark(#e3e7ee, #262c36);
+  --text: light-dark(#151a22, #e7eaf0);
+  --text-weak: light-dark(#6b7280, #8b93a4);
+  --primary: light-dark(#3b6cf6, #6b8cff);
+  --primary-soft: light-dark(#eaf0ff, #1d2740);
+  --ok: light-dark(#0f9d58, #3ddc84);
+  --warn: light-dark(#c77700, #ffb457);
+  --danger: light-dark(#d9363e, #ff6b6f);
+  --radius: 12px;
+  --radius-lg: 16px;
+  --shadow: light-dark(0 8px 28px rgb(20 30 60 / 10%), 0 8px 28px rgb(0 0 0 / 45%));
+}
+
+* { box-sizing: border-box; }
+
+html, body { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* scrollbar-width 与 ::-webkit-scrollbar 不能同时写：
+   写了标准属性后 WebKit 会忽略自定义滚动条。这里只用标准属性，
+   配合 color-scheme 让浏览器自己决定轨道颜色。 */
+* { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+
+a { color: var(--primary); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+button {
+  font: inherit;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  border-radius: 10px;
+  padding: 8px 14px;
+  transition: background .15s, border-color .15s, transform .08s;
+}
+button:hover:not(:disabled) { background: var(--panel-2); }
+button:active:not(:disabled) { transform: translateY(1px); }
+button:disabled { opacity: .5; cursor: not-allowed; }
+button.primary {
+  background: var(--primary);
+  border-color: transparent;
+  color: #fff;
+  font-weight: 600;
+}
+button.primary:hover:not(:disabled) { filter: brightness(1.07); }
+button.ghost { background: transparent; }
+button.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, transparent); }
+button.sm { padding: 4px 10px; font-size: 12.5px; border-radius: 8px; }
+
+input, textarea, select {
+  font: inherit;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 9px 12px;
+  width: 100%;
+}
+input:focus-visible, textarea:focus-visible, select:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+  border-color: transparent;
+}
+
+/* 答题框：随内容长高，但有上下限 */
+textarea.grow {
+  field-sizing: content;
+  resize: none;
+  min-block-size: 4lh;
+  max-block-size: 14lh;
+}
+
+label { display: block; font-size: 12.5px; color: var(--text-weak); margin: 12px 0 5px; }
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 18px 20px;
+}
+
+.muted { color: var(--text-weak); }
+.mono { font-variant-numeric: tabular-nums; font-family: ui-monospace, "Cascadia Code", Consolas, monospace; }
+.row { display: flex; gap: 10px; align-items: center; }
+.wrap { flex-wrap: wrap; }
+.grow-1 { flex: 1; min-width: 0; }
+.hidden { display: none !important; }
+
+.tag {
+  display: inline-block;
+  font-size: 11.5px;
+  padding: 2px 9px;
+  border-radius: 99px;
+  background: var(--primary-soft);
+  color: var(--primary);
+  font-weight: 600;
+}
+.tag.ok { background: color-mix(in srgb, var(--ok) 14%, transparent); color: var(--ok); }
+.tag.warn { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
+.tag.danger { background: color-mix(in srgb, var(--danger) 14%, transparent); color: var(--danger); }
+.tag.mute { background: var(--panel-2); color: var(--text-weak); }
+
+/* ---------------- 控制台 ---------------- */
+.console {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 36px 20px 80px;
+}
+.console h1 { font-size: 24px; margin: 0 0 6px; letter-spacing: -.01em; }
+.console .sub { color: var(--text-weak); margin-bottom: 26px; }
+.grid2 { display: grid; grid-template-columns: 380px 1fr; gap: 20px; align-items: start; }
+@media (max-width: 900px) { .grid2 { grid-template-columns: 1fr; } }
+
+.dims { display: grid; gap: 6px; margin-top: 8px; }
+.dim-row {
+  display: grid;
+  /* 第三列给权重输入框。原来写 54px，`0.14` 这种两位小数在右侧 padding
+     下会被截成「0.1」——用户看不出自己改的是 0.14 还是 0.1。 */
+  grid-template-columns: 22px 1fr 66px;
+  gap: 8px;
+  align-items: center;
+  font-size: 13px;
+  padding: 5px 8px;
+  border-radius: 8px;
+  background: var(--panel-2);
+}
+.dim-row input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--primary); }
+.dim-row .w { width: 100%; padding: 3px 6px; text-align: right; background: transparent; border-color: transparent; }
+.dim-row .w:focus-visible { border-color: var(--border); }
+
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--border); }
+th { font-weight: 600; color: var(--text-weak); font-size: 12px; }
+tbody tr:hover { background: var(--panel-2); }
+
+/* ---------------- 面试页 ---------------- */
+.interview {
+  display: grid;
+  grid-template-columns: 1fr 340px;
+  grid-template-rows: auto 1fr;
+  gap: 16px;
+  height: 100dvh;
+  padding: 16px;
+}
+@media (max-width: 900px) {
+  .interview { grid-template-columns: 1fr; height: auto; }
+}
+.interview header {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  padding: 12px 18px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+.interview header h2 { font-size: 16px; margin: 0; }
+.interview header .meta { font-size: 12.5px; color: var(--text-weak); }
+
+.chat-pane { display: flex; flex-direction: column; min-height: 0; }
+.qa-list {
+  flex: 1;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 4px 4px 12px;
+}
+.qa { display: flex; flex-direction: column; gap: 7px; max-width: 86%; }
+.qa .q, .qa .a {
+  padding: 11px 14px;
+  border-radius: 14px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.qa .q {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-top-left-radius: 5px;
+}
+.qa .a {
+  align-self: flex-end;
+  background: var(--primary);
+  color: #fff;
+  border-bottom-right-radius: 5px;
+}
+.qa .qlabel { font-size: 11px; color: var(--text-weak); }
+.qa.answer-empty .a { display: none; }
+
+.composer {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.composer .hint { font-size: 11.5px; color: var(--text-weak); }
+
+.side { display: flex; flex-direction: column; gap: 14px; min-height: 0; overflow-y: auto; }
+.cam {
+  position: relative;
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: #000;
+  aspect-ratio: 4 / 3;
+}
+.cam video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.cam .badge {
+  position: absolute;
+  left: 9px;
+  bottom: 9px;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 99px;
+  background: rgb(0 0 0 / 55%);
+  color: #fff;
+  font-variant-numeric: tabular-nums;
+}
+.cam .off {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #9aa4b2;
+  font-size: 12.5px;
+  text-align: center;
+  padding: 16px;
+}
+
+.steps { display: flex; flex-direction: column; gap: 5px; font-size: 12px; }
+.step { display: flex; gap: 7px; align-items: baseline; color: var(--text-weak); }
+.step::before { content: "·"; color: var(--primary); }
+.step.bad::before { content: "!"; color: var(--warn); }
+
+/* ---------------- 报告 ---------------- */
+.report { max-width: 980px; margin: 0 auto; padding: 30px 20px 90px; }
+.report h1 { font-size: 26px; margin: 0; letter-spacing: -.015em; }
+.hero { padding: 20px 22px; }
+
+/* 总分：不是"徽章"，所以不加边框和底色——它就在抬头里，靠字号取得重量 */
+.score-big {
+  font-size: 44px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -.025em;
+  font-variant-numeric: tabular-nums;
+  color: var(--primary);
+}
+.score-big.muted { color: var(--text-weak); }
+
+.dim-list { display: grid; gap: 8px; }
+.dim {
+  display: grid;
+  grid-template-columns: 82px 1fr 66px;
+  gap: 12px;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+.dim:last-of-type { border-bottom: none; }
+.dim-name { font-size: 13px; font-weight: 550; display: flex; gap: 4px; align-items: baseline; flex-wrap: wrap; }
+.dim-bar { min-width: 0; }
+.dim-bar .bar {
+  height: 6px;
+  border-radius: 99px;
+  background: var(--panel-2);
+  overflow: hidden;
+}
+.dim-bar .bar > i { display: block; height: 100%; border-radius: 99px; background: var(--primary); }
+.dim-bar .bar.empty {
+  /* 证据不足：用虚线而不是空条，读成"这条还没测"而不是"得了 0 分" */
+  background: repeating-linear-gradient(90deg, var(--border) 0 4px, transparent 4px 8px);
+}
+.dim-reason { font-size: 11px; color: var(--text-weak); margin-top: 4px; line-height: 1.45; }
+.dim-score { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; font-size: 14px; }
+.dim.insufficient .dim-name,
+.dim.insufficient .dim-score { color: var(--text-weak); font-weight: 500; }
+.dim.insufficient .dim-score { font-size: 11.5px; }
+
+/* 证据折叠：默认收起来。报告是"给人看的结论"，证据是"被质疑时才展开" */
+details.ev {
+  margin: 4px 0 10px 82px;
+  font-size: 11.5px;
+  color: var(--text-weak);
+}
+details.ev > summary {
+  cursor: pointer;
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px;
+  border-radius: 99px;
+  border: 1px solid var(--border);
+}
+details.ev > summary::-webkit-details-marker { display: none; }
+details.ev > summary:hover { color: var(--text); border-color: var(--text-weak); }
+details.ev[open] > summary { margin-bottom: 6px; }
+details.ev ul { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
+details.ev li { line-height: 1.5; }
+
+.callout {
+  border-left: 3px solid var(--warn);
+  background: color-mix(in srgb, var(--warn) 8%, transparent);
+  padding: 11px 14px;
+  border-radius: 0 10px 10px 0;
+  font-size: 13px;
+  margin: 12px 0 0;
+}
+.callout.danger {
+  border-left-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+}
+.callout.ok {
+  border-left-color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 8%, transparent);
+}
+.callout.warn {
+  border-left-color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 8%, transparent);
+}
+
+/* 过程异常：用两列小卡片，让"哪一种异常"一眼可数 */
+.fb-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
+.fb {
+  padding: 9px 11px;
+  border-radius: 9px;
+  background: var(--panel-2);
+  border-left: 2px solid var(--warn);
+}
+.fb-t { font-size: 12.5px; font-weight: 600; }
+.fb-d { font-size: 11.5px; color: var(--text-weak); margin-top: 3px; line-height: 1.45; }
+
+.tl { display: flex; flex-direction: column; gap: 9px; }
+.tl-head { display: flex; gap: 7px; align-items: center; margin-bottom: 6px; flex-wrap: wrap; }
+.tl-q { font-size: 13px; font-weight: 550; line-height: 1.5; }
+.tl-a {
+  color: var(--text-weak);
+  font-size: 12.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  margin-top: 5px;
+  padding-left: 10px;
+  border-left: 2px solid var(--border);
+}
+
+.kv { display: grid; grid-template-columns: 118px 1fr; gap: 7px 14px; font-size: 12.5px; }
+.kv .k { color: var(--text-weak); }
+.kv .v { min-width: 0; }
+
+ul.limits { margin: 8px 0 0; padding-left: 20px; font-size: 12.5px; color: var(--text-weak); }
+ul.limits li { margin-bottom: 6px; line-height: 1.55; }
+
+@media (max-width: 640px) {
+  .report { padding: 16px 12px 60px; }
+  .dim { grid-template-columns: 68px 1fr 56px; gap: 8px; }
+  details.ev { margin-left: 0; }
+  .kv { grid-template-columns: 92px 1fr; }
+}
+
+@media print {
+  body { background: #fff; }
+  .no-print { display: none !important; }
+  .report { padding: 0; max-width: none; }
+  .card { break-inside: avoid; box-shadow: none; }
+  details.ev { display: none; }
+}

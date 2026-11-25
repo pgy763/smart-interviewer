@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AI 面试观察助手 · 控制台</title>
+<link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+<div class="console">
+  <h1>AI 面试观察助手</h1>
+  <div class="sub">
+    面向面试官的辅助观察工具：结构化的出题与追问、面试过程参数可调、
+    基于画面与语音的实时观察、可导出的分析报告。**不做录用判断**。
+  </div>
+
+  <div class="row wrap" style="margin-bottom:20px;gap:10px">
+    <span class="tag {{ 'ok' if has_key else 'mute' }}">
+      provider: {{ provider }}{{ '（已配置 DASHSCOPE_API_KEY）' if has_key else '（未配置 Key，走确定性模拟）' }}
+    </span>
+    <span class="muted" style="font-size:12.5px">
+      模拟通道与真实通道走同一套提示词与同一条链路，只是把模型换成了规则实现，
+      保证没 Key 也能完整跑通全流程。
+    </span>
+  </div>
+
+  <div class="grid2">
+    <!-- 左侧：新建面试 -->
+    <form class="card" id="createForm">
+      <div style="font-weight:650;font-size:15px;margin-bottom:2px">新建一场面试</div>
+      <div class="muted" style="font-size:12.5px">这些参数在面试过程中还能改（右侧面板 / 面试页）。</div>
+
+      <label for="candidate">候选人姓名</label>
+      <input id="candidate" name="candidate_name" placeholder="例如：张三" required />
+
+      <label for="jobRole">岗位</label>
+      <input id="jobRole" name="job_role" value="后端开发实习生" />
+
+      <label for="resume">简历要点（可选，会作为出题上下文）</label>
+      <textarea id="resume" class="grow" rows="3"
+        placeholder="例如：Netty 自研二进制协议、Redis INCR 会话序号、159 项协议断言"></textarea>
+
+      <div class="row" style="margin-top:14px;gap:12px">
+        <div class="grow-1">
+          <label for="qTarget">目标题量</label>
+          <input id="qTarget" type="number" min="1" max="20" value="6" style="width:100%" />
+        </div>
+        <div class="grow-1">
+          <label for="followupMax">单题追问上限</label>
+          <input id="followupMax" type="number" min="0" max="5" value="2" style="width:100%" />
+        </div>
+      </div>
+
+      <div class="row" style="margin-top:12px;gap:12px">
+        <div class="grow-1">
+          <label for="baseMinutes">基准时长（分钟）</label>
+          <input id="baseMinutes" type="number" min="5" max="120" value="20" style="width:100%" />
+        </div>
+        <div class="grow-1">
+          <label for="maxMinutes">上限（分钟）</label>
+          <input id="maxMinutes" type="number" min="5" max="120" value="45" style="width:100%" />
+        </div>
+      </div>
+
+      <label>能力维度与权重（取消勾选 = 本场不评估）</label>
+      <div class="dims" id="dims"></div>
+
+      <div class="row wrap" style="margin-top:14px;gap:14px">
+        <label class="row" style="margin:0;gap:6px;cursor:pointer">
+          <input type="checkbox" id="pressureRound" checked style="width:15px;height:15px" />
+          <span>插入压力题</span>
+        </label>
+        <label class="row" style="margin:0;gap:6px;cursor:pointer">
+          <input type="checkbox" id="variantRound" checked style="width:15px;height:15px" />
+          <span>插入条件变更题</span>
+        </label>
+        <label class="row" style="margin:0;gap:6px;cursor:pointer">
+          <input type="checkbox" id="voiceEnabled" checked style="width:15px;height:15px" />
+          <span>启用语音</span>
+        </label>
+      </div>
+
+      <button class="primary" type="submit" style="width:100%;margin-top:18px">
+        创建并开始
+      </button>
+      <div class="muted" id="createMsg" style="font-size:12.5px;margin-top:8px"></div>
+    </form>
+
+    <!-- 右侧：历史 -->
+    <div class="card">
+      <div class="row" style="justify-content:space-between;margin-bottom:10px">
+        <div>
+          <div style="font-weight:650;font-size:15px">最近的面试</div>
+          <div class="muted" style="font-size:12.5px">
+            点开一场可以看报告。断了的场次也能打开（会标注中断原因）。
+          </div>
+        </div>
+        <button class="sm ghost" id="refreshBtn">刷新</button>
+      </div>
+      <table>
+        <thead>
+          <tr><th>候选人</th><th>岗位</th><th>状态</th><th>题量</th><th>时间</th><th></th></tr>
+        </thead>
+        <tbody id="rows">
+          {% for r in rows %}
+          <tr>
+            <td>{{ r.candidate_name }}</td>
+            <td class="muted">{{ r.job_role }}</td>
+            <td>
+              {% if r.status == 'finished' %}<span class="tag ok">已结束</span>
+              {% elif r.status == 'running' %}<span class="tag">进行中</span>
+              {% elif r.status == 'aborted' %}<span class="tag danger">已中止</span>
+              {% else %}<span class="tag mute">{{ r.status }}</span>{% endif %}
+            </td>
+            <td class="mono muted">{{ r.config.get('questions_target', '-') }}</td>
+            <td class="mono muted" data-ts="{{ r.started_at }}"></td>
+            <td style="white-space:nowrap">
+              <a href="/interview/{{ r.id }}" class="sm">面试页</a>
+              <span class="muted">·</span>
+              <a href="/report/{{ r.id }}" class="sm">报告</a>
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="6" class="muted" style="padding:26px 10px;text-align:center">
+            还没有面试记录，先在左边创建一场。
+          </td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:20px">
+    <div style="font-weight:650;font-size:15px;margin-bottom:6px">这套东西怎么用（30 秒）</div>
+    <ol class="muted" style="font-size:13px;margin:0;padding-left:20px;line-height:1.9">
+      <li>左边填候选人姓名 → 创建，会直接跳到候选人面试页。</li>
+      <li>候选人页点「开启摄像头与麦克风」，然后按提问逐题作答；画面会每 3 秒抽一帧做观察。</li>
+      <li>面试过程中可以在右侧看到实时观察；面试官想加题/加权，在面试页的参数面板里改。</li>
+      <li>结束后打开报告页，可打印/另存为 PDF。</li>
+    </ol>
+  </div>
+</div>
+
+<script>
+  // 维度表由后端注入，避免前后端两份定义漂移
+  window.__DIMS = {{ dimensions | tojson }};
+</script>
+<script type="module" src="/static/console.js"></script>
+</body>
+</html>

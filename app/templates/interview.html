@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>面试 · {{ interview.candidate_name }}</title>
+<link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+<div class="interview">
+  <header>
+    <div class="grow-1">
+      <h2>{{ interview.candidate_name }} · {{ interview.job_role }}</h2>
+      <div class="meta" id="hmeta">准备中…</div>
+    </div>
+    <a href="/" class="sm">控制台</a>
+    <a href="/report/{{ interview.id }}" class="sm" id="reportLink">报告</a>
+    <button class="sm danger" id="finishBtn">结束面试</button>
+  </header>
+
+  <!-- 左：问答 -->
+  <section class="chat-pane card">
+    <div class="qa-list" id="qaList">
+      <div class="muted" style="font-size:12.5px">下方题目会逐题出现。可以先开摄像头和麦克风。</div>
+    </div>
+    <div class="composer">
+      <textarea id="answer" class="grow" placeholder="在这里作答，或点「开始说话」用语音转写"></textarea>
+      <div class="row wrap" style="gap:8px">
+        <button class="primary" id="submitBtn">提交这一题</button>
+        <button class="ghost sm" id="voiceBtn">🎙 开始说话</button>
+        <span class="tag mute" id="voiceState">语音未启动</span>
+        <span class="grow-1"></span>
+        <span class="hint">Enter 提交，Shift+Enter 换行</span>
+      </div>
+      <div class="muted" id="msg" style="font-size:12px"></div>
+    </div>
+  </section>
+
+  <!-- 右：观察 -->
+  <aside class="side">
+    <div class="card" style="padding:12px">
+      <div class="row" style="justify-content:space-between;margin-bottom:9px">
+        <div style="font-weight:600;font-size:13px">画面观察</div>
+        <button class="sm ghost" id="camBtn">开启摄像头</button>
+      </div>
+      <div class="cam">
+        <video id="video" autoplay muted playsinline></video>
+        <div class="off" id="camOff">摄像头未开启<br /><span style="font-size:11px">开启后每 3 秒抽一帧做本地观察</span></div>
+        <div class="badge hidden" id="camBadge"></div>
+      </div>
+      <div class="muted" id="camNote" style="font-size:11.5px;margin-top:8px">
+        观察项：是否在画面内、视线大体朝向、肢体动作幅度。全部在服务端本地计算，不上传第三方。
+      </div>
+    </div>
+
+    <div class="card" style="padding:12px">
+      <div style="font-weight:600;font-size:13px;margin-bottom:8px">本轮推理步骤</div>
+      <div class="steps" id="steps">
+        <div class="muted" style="font-size:12px">提交第一题后会显示。</div>
+      </div>
+    </div>
+
+    <div class="card" style="padding:12px">
+      <div class="row" style="justify-content:space-between;margin-bottom:8px">
+        <div style="font-weight:600;font-size:13px">面试参数（可实时调整）</div>
+        <button class="sm ghost" id="pacingBtn">看建议</button>
+      </div>
+      <div class="row" style="gap:8px">
+        <div class="grow-1">
+          <label for="qTarget2" style="margin-top:0">目标题量</label>
+          <input id="qTarget2" type="number" min="1" max="20" value="{{ config.questions_target }}" />
+        </div>
+        <div class="grow-1">
+          <label for="followupMax2" style="margin-top:0">追问上限</label>
+          <input id="followupMax2" type="number" min="0" max="5" value="{{ config.followup_max }}" />
+        </div>
+      </div>
+      <button class="sm" id="applyCfg" style="margin-top:10px;width:100%">应用（下一题生效）</button>
+      <div class="muted" id="pacingOut" style="font-size:11.5px;margin-top:8px"></div>
+    </div>
+  </aside>
+</div>
+
+<script>
+  window.__IID = "{{ interview.id }}";
+  window.__CFG = {{ interview.config_json | safe }};
+</script>
+<script type="module" src="/static/interview.js"></script>
+</body>
+</html>

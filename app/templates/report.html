@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>面试报告 · {{ r.interview.candidate }}</title>
+<link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+<div class="report">
+
+  <div class="row no-print" style="justify-content:space-between;margin-bottom:14px">
+    <a href="/" class="sm">← 控制台</a>
+    <div class="row" style="gap:8px">
+      <a href="/interview/{{ r.interview.id }}" class="sm">回到面试</a>
+      <button class="sm primary" onclick="window.print()">打印 / 存为 PDF</button>
+    </div>
+  </div>
+
+  <!-- 抬头 -->
+  <div class="hero card">
+    <div class="row wrap" style="justify-content:space-between;align-items:flex-start">
+      <div>
+        <div class="muted" style="font-size:12px;letter-spacing:.04em">面试分析报告</div>
+        <h1 style="margin:4px 0 6px">{{ r.interview.candidate }}</h1>
+        <div class="muted" style="font-size:13px">
+          {{ r.interview.job_role }} · 实际时长 {{ '%.1f'|format((r.interview.duration_sec or 0) / 60) }} 分钟
+          · 模型通道 <b>{{ r.provider }}</b>
+        </div>
+      </div>
+      <div style="text-align:right">
+        {% if r.overall is not none %}
+        <div class="score-big">{{ '%.1f'|format(r.overall) }}</div>
+        <div class="muted" style="font-size:12.5px">{{ r.overall_label }}</div>
+        {% else %}
+        <div class="score-big muted">—</div>
+        <div class="muted" style="font-size:12.5px">无法评估</div>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="callout {{ 'warn' if r.verdict.kind != 'ok' else 'ok' }}" style="margin-top:14px">
+      <b>{{ r.verdict.text }}</b>
+      <div class="muted" style="font-size:12px;margin-top:4px">
+        {{ r.scored_count }} 个维度有足够证据出分{% if r.insufficient_names %}，
+        {{ r.insufficient_names|length }} 个维度证据不足（{{ r.insufficient_names|join('、') }}）{% endif %}
+        · 权重按启用维度归一化
+      </div>
+    </div>
+  </div>
+
+  <!-- 异常兜底 -->
+  {% if r.fallback_summary %}
+  <div class="card" style="padding:14px 16px;margin-top:14px">
+    <div style="font-weight:600;font-size:13.5px;margin-bottom:8px">过程异常（已兜底，不影响报告产出）</div>
+    <div class="fb-list">
+      {% for f in r.fallback_summary %}
+      <div class="fb">
+        <div class="fb-t">{{ f.title }}</div>
+        <div class="fb-d">{{ f.desc }}{% if f.detail %} · {{ f.detail }}{% endif %}</div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- 维度 -->
+  <div class="card" style="padding:14px 16px;margin-top:14px">
+    <div class="row" style="justify-content:space-between;margin-bottom:10px">
+      <div style="font-weight:600;font-size:13.5px">能力维度</div>
+      <div class="muted" style="font-size:11.5px">分数由规则计算，模型只抽证据</div>
+    </div>
+    <div class="dim-list">
+      {% for d in r.dimensions %}
+      <div class="dim {{ 'insufficient' if d.status != 'scored' }}">
+        <div class="dim-name">
+          {{ d.name }}
+          <span class="muted" style="font-size:10.5px">w={{ '%.2f'|format(d.weight) }}</span>
+        </div>
+        <div class="dim-bar">
+          {% if d.status == 'scored' %}
+          <div class="bar"><i style="width: {{ d.score }}%"></i></div>
+          <div class="dim-reason">{{ d.reason }}</div>
+          {% else %}
+          <div class="bar empty"></div>
+          <div class="dim-reason">{{ d.reason }}</div>
+          {% endif %}
+        </div>
+        <div class="dim-score">
+          {% if d.status == 'scored' %}{{ '%.1f'|format(d.score) }}{% else %}证据不足{% endif %}
+        </div>
+      </div>
+      {% if d.evidence %}
+      <details class="ev">
+        <summary>看 {{ d.name }} 的证据（{{ d.evidence|length }} 条）</summary>
+        <ul>
+          {% for e in d.evidence %}
+          <li><span class="tag mute">{{ e.kind }}</span> {{ e.text }}
+            {% if e.turn_idx is not none %}<span class="muted" style="font-size:11px">· 第 {{ e.turn_idx + 1 }} 轮</span>{% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+      </details>
+      {% endif %}
+      {% endfor %}
+    </div>
+  </div>
+
+  <!-- 风险信号 -->
+  <div class="card" style="padding:14px 16px;margin-top:14px">
+    <div class="row" style="justify-content:space-between;margin-bottom:8px">
+      <div style="font-weight:600;font-size:13.5px">风险信号（读稿 / 离席）</div>
+      <div>
+        <span class="tag {{ 'danger' if r.risk.level == 'high' else ('warn' if r.risk.level == 'warn' else 'ok') }}">
+          {{ r.risk.level }} · {{ '%.2f'|format(r.risk.score) }}
+        </span>
+      </div>
+    </div>
+    {% if r.risk.reasons %}
+    <ul class="limits">
+      {% for x in r.risk.reasons %}<li>{{ x }}</li>{% endfor %}
+    </ul>
+    {% else %}
+    <div class="muted" style="font-size:12.5px">没有触发任何风险阈值。</div>
+    {% endif %}
+
+    <div class="kv" style="margin-top:10px">
+      <div><span class="k">视频帧</span><span class="v">{{ r.risk.vision.frames }} 帧（有脸 {{ r.risk.vision.available }} 帧）</span></div>
+      <div><span class="k">看镜头比例</span><span class="v">
+        {% if r.risk.vision.looking_ratio is not none %}{{ '%.0f'|format(r.risk.vision.looking_ratio * 100) }}%（分母是有脸帧）{% else %}—{% endif %}
+      </span></div>
+      <div><span class="k">离开画面</span><span class="v">
+        {% if r.risk.vision.away_ratio is not none %}{{ '%.1f'|format(r.risk.vision.away_ratio * 100) }}%（分母是全部帧） · 最长 {{ '%.1f'|format(r.risk.vision.longest_away_sec) }}s{% else %}—{% endif %}
+      </span></div>
+      <div><span class="k">动作幅度</span><span class="v">均值 {{ '%.2f'|format(r.risk.vision.motion_avg) }} · P90 {{ '%.2f'|format(r.risk.vision.motion_p90) }}</span></div>
+      <div><span class="k">语速</span><span class="v">
+        {% if r.risk.audio_headline.speed_chars_per_sec %}约 {{ '%.1f'|format(r.risk.audio_headline.speed_chars_per_sec) }} 字/秒{% else %}未采集{% endif %}
+        {% if r.risk.audio_headline.speed_cv %}（波动 {{ '%.2f'|format(r.risk.audio_headline.speed_cv) }}）{% endif %}
+      </span></div>
+      <div><span class="k">停顿占比</span><span class="v">
+        {% if r.risk.audio_headline.pause_ratio is not none %}{{ '%.0f'|format(r.risk.audio_headline.pause_ratio * 100) }}%{% else %}—{% endif %}
+      </span></div>
+      <div><span class="k">口头语密度</span><span class="v">
+        {% if r.risk.audio_headline.filler_ratio is not none %}{{ '%.1f'|format(r.risk.audio_headline.filler_ratio) }} / 百字{% else %}—{% endif %}
+      </span></div>
+    </div>
+  </div>
+
+  <!-- 时间线 -->
+  <div class="card" style="padding:14px 16px;margin-top:14px">
+    <div style="font-weight:600;font-size:13.5px;margin-bottom:10px">这场面试问了什么</div>
+    {% for t in r.timeline %}
+    <div class="tl">
+      <div class="tl-head">
+        <span class="tag mute">{{ t.phase_label }}</span>
+        <span class="muted" style="font-size:11.5px">第 {{ t.idx + 1 }} 轮</span>
+        {% if t.off_topic %}<span class="tag warn">偏题</span>{% endif %}
+        {% if t.has_number %}<span class="tag ok">有数字</span>{% endif %}
+        {% if t.has_example %}<span class="tag ok">有例子</span>{% endif %}
+      </div>
+      <div class="tl-q">{{ t.question }}</div>
+      {% if t.answered %}
+      <div class="tl-a">{{ t.answer }}</div>
+      {% if t.key_points %}
+      <div class="muted" style="font-size:11.5px;margin-top:5px">要点：{{ t.key_points|join(' / ') }}</div>
+      {% endif %}
+      {% else %}
+      <div class="muted" style="font-size:12px;margin-top:5px">（未作答）</div>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+
+  <!-- 成本 -->
+  <div class="card" style="padding:14px 16px;margin-top:14px">
+    <div class="row" style="justify-content:space-between;margin-bottom:8px">
+      <div style="font-weight:600;font-size:13.5px">成本核算</div>
+      <div class="muted" style="font-size:11.5px">{{ r.cost.calls }} 次模型调用</div>
+    </div>
+    <div class="kv">
+      <div><span class="k">本场合计</span><span class="v"><b>¥{{ '%.4f'|format(r.cost.total_cny) }}</b>
+        {% if r.provider == 'mock' %}<span class="tag mute">mock 通道计 0</span>{% endif %}</span></div>
+      {% for purpose, v in r.cost.by_purpose.items() %}
+      <div><span class="k">{{ purpose }}</span><span class="v">¥{{ '%.4f'|format(v) }}</span></div>
+      {% endfor %}
+      {% for model, v in r.cost.by_model.items() %}
+      <div><span class="k">{{ model }}</span><span class="v">¥{{ '%.4f'|format(v) }}</span></div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <!-- 时长建议 + 局限 -->
+  <div class="card" style="padding:14px 16px;margin-top:14px">
+    <div style="font-weight:600;font-size:13.5px;margin-bottom:8px">时长建议</div>
+    <div style="font-size:13px">{{ r.pacing }}</div>
+  </div>
+
+  <div class="card" style="padding:14px 16px;margin-top:14px">
+    <div style="font-weight:600;font-size:13.5px;margin-bottom:8px">这份报告不做什么</div>
+    <ul class="limits">
+      {% for x in r.limitations %}<li>{{ x }}</li>{% endfor %}
+    </ul>
+  </div>
+
+  <div class="muted" style="font-size:11px;margin:16px 2px 30px">
+    报告 ID {{ r.interview.id }} · provider {{ r.provider }} · 生成于
+    <span class="mono">{{ r.generated_at|int }}</span>
+  </div>
+</div>
+</body>
+</html>

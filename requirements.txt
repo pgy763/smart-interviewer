@@ -1,0 +1,25 @@
+# 这个项目故意不依赖 FastAPI / SQLAlchemy / pytest：
+# 沙箱里 pip install 装不上，所以选型时就只用本机已有的库。
+# 版本是本机实测跑通的版本，只列直接依赖，不锁传递依赖。
+
+starlette==1.6.0
+uvicorn==0.52.4
+jinja2==3.1.6
+python-multipart==0.0.32
+
+# 编排：每提交一次回答跑一次图
+langgraph==1.2.11
+
+# 模型通道（不填 Key 时走 mock，这两个包仍然要装，因为 import 在模块顶层）
+dashscope==1.27.7
+openai==3.28.0
+
+# 视觉启发式：纯 Pillow + numpy，不调模型
+pillow==12.3.0
+numpy==2.5.4
+
+# 实时语音可选通道（Qwen-Omni 双向流）
+websockets==16.1.1
+
+# 截图/端到端脚本用（跑测试才需要，跑服务不需要）
+websocket-client==1.9.2
