@@ -1,0 +1,20 @@
+{
+  "name": "AI 面试观察助手",
+  "short_name": "AI 面试",
+  "description": "面向面试官的辅助观察工具：结构化出题与追问、画面与语音的实时观察、可导出的分析报告。不做录用判断。",
+  "lang": "zh-CN",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f7f8fa",
+  "theme_color": "#2563eb",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/static/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

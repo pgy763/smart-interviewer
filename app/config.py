@@ -276,6 +276,11 @@ class Settings:
     vision_keep_frames: int = int(os.getenv("SI_VISION_KEEP_FRAMES", "1200"))
     # 是否把每帧原图落盘（默认关闭，demo 里只在需要复盘时开）
     keep_frames: bool = os.getenv("SI_KEEP_FRAMES", "0") == "1"
+    # 单场面试的模型花费上限（元）。超过就把后续调用降级成规则化实现，
+    # 但**不中断面试**——候选人答到一半被踢出去，比多花两毛钱严重得多。
+    budget_cny: float = float(os.getenv("SI_BUDGET_CNY", "1.0"))
+    # 每个租户每月可用场次。商用默认值，演示用 20 场足够。
+    monthly_quota: int = int(os.getenv("SI_MONTHLY_QUOTA", "20"))
 
     def resolved_provider(self) -> str:
         if self.provider != "auto":

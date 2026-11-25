@@ -67,10 +67,20 @@ def _cfg_from_dict(d: dict) -> InterviewConfig:
 class Session:
     """一场进行中面试的内存视图。真源永远是 SQLite，这里只是缓存。"""
 
-    def __init__(self, iid: str, cfg: InterviewConfig, provider):
+    def __init__(self, iid: str, cfg: InterviewConfig, provider,
+                 tenant: str = "default", budget_cny: float | None = None):
         self.iid = iid
         self.cfg = cfg
-        self.provider = provider
+        self.tenant = tenant
+        # 预算熔断：把 provider 包一层，超预算自动降级到规则化实现。
+        # 为什么在会话层而不在 provider 里：预算的边界是"场"，provider 是无状态单例，
+        # 它不知道一场面试还剩多少钱。
+        from app.billing.guard import GuardedProvider
+        from app.billing.quota import BudgetGuard
+
+        limit = budget_cny if budget_cny is not None else getattr(settings, "budget_cny", 1.0)
+        self.guard = BudgetGuard(limit_cny=float(limit))
+        self.provider = GuardedProvider(provider, self.guard, iid, tenant)
         self.lock = threading.Lock()
         self.last_activity = time.time()
         self.last_frame_ts = 0.0
@@ -81,6 +91,9 @@ class Session:
         self.fallbacks: dict[str, Any] = {}
         # 每帧的缩略图，用来算帧间 motion（不落库，只在内存）
         self.prev_small = None
+        # 真正调模型的原始 provider（报告里要标 provider.name，
+        # 而 GuardedProvider 的 name 带了 "+guard" 后缀）
+        self.raw_provider = provider
 
     # -- 状态重建 ---------------------------------------------------------
     def load_state(self, answer: str = "", audio_ms: int = 0,
@@ -102,6 +115,11 @@ class Session:
         phase = turns[-1]["phase"] if turns else "main"
         question = turns[-1]["question"] if turns else ""
 
+        # 接入层产物（结构化简历 + 上一轮报告）。
+        # 每轮都读一次库，而不是缓存在 Session 上：简历在面试过程中可能被
+        # 面试官重新上传（见 adjust_config 的 resume_profile 分支），缓存会读到旧值。
+        mat = db.get_material(self.iid)
+
         # 追问的父问题：往前找最近的 main/pressure/variant
         parent_idx = None
         for t in reversed(turns):
@@ -116,6 +134,8 @@ class Session:
             "job_role": self.cfg.job_role,
             "difficulty": self.cfg.difficulty,
             "resume": (db.get_interview(self.iid) or {}).get("resume_text") or "",
+            "resume_profile": mat["resume_profile"],
+            "prior_report": mat["prior_report"],
             "turns": [dict(t) for t in done],
             "asked_questions": asked,
             "idx": idx,
@@ -260,16 +280,28 @@ class SessionManager:
         self._lock = threading.Lock()
 
     def create(self, candidate_name: str, job_role: str, resume_text: str,
-               config_dict: dict | None = None) -> dict:
+               config_dict: dict | None = None,
+               resume_profile: dict | None = None,
+               prior_report: dict | None = None,
+               material: dict | None = None,
+               tenant: str = "default") -> dict:
         cfg = _cfg_from_dict(config_dict or {"job_role": job_role})
         cfg.job_role = job_role or cfg.job_role
         provider = get_provider()
         iid = db.create_interview(candidate_name, cfg.job_role, resume_text,
-                                  asdict(cfg), provider.name)
-        s = Session(iid, cfg, provider)
+                                  asdict(cfg), provider.name,
+                                  resume_profile=resume_profile,
+                                  prior_report=prior_report,
+                                  material=material)
+        s = Session(iid, cfg, provider, tenant=tenant)
         with self._lock:
             self._sessions[iid] = s
         db.set_interview_status(iid, "running")
+        from app.billing.quota import audit
+
+        audit("interview.create", tenant=tenant, interview_id=iid, actor="console",
+              detail={"candidate": candidate_name, "job_role": cfg.job_role,
+                      "questions_target": cfg.questions_target})
         first = s.ask_next()
         return {"interview_id": iid, "provider": provider.name,
                 "config": asdict(cfg), "first": first}

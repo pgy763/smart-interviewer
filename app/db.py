@@ -13,6 +13,7 @@ SQLite 是单文件、零运维，且支持并发读；写入都是单条 upsert
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import threading
 import time
@@ -23,6 +24,7 @@ from typing import Any, Iterable
 
 from app.config import settings
 
+log = logging.getLogger(__name__)
 _lock = threading.Lock()
 
 SCHEMA = """
@@ -42,7 +44,13 @@ CREATE TABLE IF NOT EXISTS interview (
     ended_at        REAL,
     abort_reason    TEXT,
     -- 四种异常的兜底结果记在这里，报告里要如实展示
-    fallback_json   TEXT
+    fallback_json   TEXT,
+    -- 接入层产物：结构化简历档案 / 上一轮报告摘要 / 素材来源
+    -- 存 JSON 而不是拆成列，是因为这两样是"外部物料的解析快照"，
+    -- 结构会随解析规则演进而变，拆列会让每次改解析都要改表。
+    resume_profile_json TEXT,
+    prior_report_json   TEXT,
+    material_json       TEXT
 );
 
 -- 面试过程中每一轮问答
@@ -127,11 +135,51 @@ def _connect(path: Path | str) -> sqlite3.Connection:
     return conn
 
 
+def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    return {r["name"] for r in rows}
+
+
+# 加列迁移表：{表名: [(列名, 列定义)]}
+# 为什么需要它：SCHEMA 里全是 `CREATE TABLE IF NOT EXISTS`，对**已存在**的表
+# 是空操作。老库升级上来时新列不存在，插入/查询会报 `no such column`。
+# 这和 im 项目里踩的坑是同一个（那里是 MySQL 的 SchemaUpgrade）。
+_MIGRATIONS: dict[str, list[tuple[str, str]]] = {
+    "interview": [
+        ("resume_profile_json", "TEXT"),
+        ("prior_report_json", "TEXT"),
+        ("material_json", "TEXT"),
+    ],
+}
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """幂等加列：先查 PRAGMA table_info，缺哪列补哪列。
+
+    幂等性来自"查询"而不是"捕获异常"——捕获 `duplicate column` 也行，
+    但那样每次启动都会在日志里留一条错误，运维看日志时会以为是故障。
+    """
+    for table, cols in _MIGRATIONS.items():
+        try:
+            have = _columns(conn, table)
+        except sqlite3.Error:
+            continue  # 表还没建（首次启动的中间态），SCHEMA 会负责建
+        for name, decl in cols:
+            if name in have:
+                continue
+            try:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+                log.info("表结构升级：%s.%s 已添加", table, name)
+            except sqlite3.Error as e:  # pragma: no cover - 并发启动时可能撞
+                log.error("表结构升级失败：%s.%s：%s", table, name, e)
+
+
 def init_db(path: Path | str | None = None) -> None:
     p = Path(path or settings.db_path)
     p.parent.mkdir(parents=True, exist_ok=True)
     with _lock, _connect(p) as conn:
         conn.executescript(SCHEMA)
+        _migrate(conn)
 
 
 @contextmanager
@@ -161,15 +209,22 @@ def create_interview(
     resume_text: str,
     config_json: dict,
     provider: str,
+    resume_profile: dict | None = None,
+    prior_report: dict | None = None,
+    material: dict | None = None,
 ) -> str:
     iid = new_id()
     with get_conn() as conn:
         conn.execute(
             """INSERT INTO interview
-               (id, candidate_name, job_role, resume_text, config_json, status, provider, started_at)
-               VALUES (?,?,?,?,?,?,?,?)""",
+               (id, candidate_name, job_role, resume_text, config_json, status, provider, started_at,
+                resume_profile_json, prior_report_json, material_json)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
             (iid, candidate_name, job_role, resume_text, json.dumps(config_json, ensure_ascii=False),
-             "created", provider, time.time()),
+             "created", provider, time.time(),
+             json.dumps(resume_profile or {}, ensure_ascii=False),
+             json.dumps(prior_report or {}, ensure_ascii=False),
+             json.dumps(material or {}, ensure_ascii=False)),
         )
     return iid
 
@@ -178,6 +233,56 @@ def get_interview(iid: str) -> dict | None:
     with get_conn() as conn:
         row = conn.execute("SELECT * FROM interview WHERE id=?", (iid,)).fetchone()
     return dict(row) if row else None
+
+
+def get_material(iid: str) -> dict:
+    """取接入层产物，一次返回三块。
+
+    统一在这里做 JSON 解析与容错：库里存的是文本，解析失败就返回空 dict，
+    调用方（出题节点、报告）永远不用写 try/except。
+    """
+    row = get_interview(iid)
+    if not row:
+        return {"resume_profile": {}, "prior_report": {}, "material": {}}
+    out: dict[str, dict] = {}
+    for key, col in (("resume_profile", "resume_profile_json"),
+                     ("prior_report", "prior_report_json"),
+                     ("material", "material_json")):
+        try:
+            raw = row.get(col)
+            out[key] = json.loads(raw) if raw else {}
+        except (TypeError, ValueError):
+            out[key] = {}
+    return out
+
+
+def update_material(iid: str, **patch: Any) -> None:
+    """面试进行中更新接入层材料（重传简历 / 粘贴上一轮报告）。
+
+    支持四个键：
+    - `resume_profile` / `prior_report`：整块替换（JSON）
+    - `material`：整块替换（记录"这份材料从哪来"）
+    - `resume_text`：纯文本简历原文也允许改，因为出题 fallback 要用它
+
+    只更新传进来的键，没传的保持原值。这是刻意的：重传简历不应该顺手把
+    上一轮报告清空，反过来也一样。
+    """
+    cols: list[str] = []
+    vals: list[Any] = []
+    for key, col in (("resume_profile", "resume_profile_json"),
+                     ("prior_report", "prior_report_json"),
+                     ("material", "material_json")):
+        if key in patch:
+            cols.append(f"{col}=?")
+            vals.append(json.dumps(patch[key] or {}, ensure_ascii=False))
+    if "resume_text" in patch:
+        cols.append("resume_text=?")
+        vals.append(patch["resume_text"] or "")
+    if not cols:
+        return
+    vals.append(iid)
+    with get_conn() as conn:
+        conn.execute(f"UPDATE interview SET {', '.join(cols)} WHERE id=?", vals)
 
 
 def list_interviews(limit: int = 50) -> list[dict]:

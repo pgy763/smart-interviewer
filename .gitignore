@@ -8,3 +8,5 @@ tools/_edge_profile/
 tools/_edge_probe*/
 tests/_tmp/
 *.y4m
+data/*.txt
+tools/_shot_tmp/

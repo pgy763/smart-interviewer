@@ -28,7 +28,9 @@ class TurnState(TypedDict, total=False):
     interview_id: str
     job_role: str
     difficulty: str
-    resume: str
+    resume: str                # 简历原文或手填要点（可能是长文本，节点里会截断）
+    resume_profile: dict       # 结构化简历档案（技能/项目/年限），见 app/intake/resume.py
+    prior_report: dict         # 上一轮报告摘要（缺口维度/风险/建议追问点），见 app/intake/report.py
 
     # ---- 历史 ----
     turns: list[dict]          # 已完成轮次（含 phase/answer/idx）

@@ -52,6 +52,84 @@ document.querySelectorAll("td[data-ts]").forEach((td) => {
   if (ts) td.textContent = fmt.format(new Date(ts * 1000));
 });
 
+// --- 简历文件 / 上一轮报告（接入层） ---
+// 为什么在浏览器里读成 base64 再上传、而不是 multipart：
+// 后端是纯 Starlette，没有文件上传中间件，也不想为了一个字段引 python-multipart
+// 之外的依赖。base64 多占 33% 流量，但一份简历几十 KB，可以接受。
+let resumeFileB64 = "";
+let resumeFileName = "";
+const fileInput = document.getElementById("resumeFile");
+const fileHint = document.getElementById("fileHint");
+const fileParsed = document.getElementById("fileParsed");
+
+document.getElementById("pickFileBtn").addEventListener("click", () => fileInput.click());
+
+fileInput.addEventListener("change", () => {
+  const f = fileInput.files && fileInput.files[0];
+  if (!f) return;
+  if (f.size > 8 * 1024 * 1024) {
+    fileHint.textContent = "文件超过 8MB，请压缩后再传";
+    return;
+  }
+  resumeFileName = f.name;
+  fileHint.textContent = `已选择 ${f.name}（${(f.size / 1024).toFixed(0)} KB）`;
+  const rd = new FileReader();
+  rd.onload = () => {
+    // readAsDataURL 会带 data:...;base64, 前缀，后端能容忍，这里保留原样
+    resumeFileB64 = String(rd.result || "");
+    fileParsed.textContent = "文件已就绪，创建面试时会自动解析成技能/项目。";
+  };
+  rd.onerror = () => {
+    fileHint.textContent = "读取文件失败，请重试或直接粘贴文本";
+  };
+  rd.readAsDataURL(f);
+});
+
+let priorReportJson = "";
+const priorBox = document.getElementById("priorReport");
+const priorParsed = document.getElementById("priorParsed");
+
+priorBox.addEventListener("input", () => {
+  const v = priorBox.value.trim();
+  priorReportJson = v;
+  if (!v) {
+    priorParsed.textContent = "";
+    return;
+  }
+  try {
+    const j = JSON.parse(v);
+    const rep = j.report || j;
+    const bits = [];
+    if (rep.overall != null) bits.push(`综合分 ${Number(rep.overall).toFixed(1)}`);
+    const ins = rep.insufficient_names || [];
+    if (ins.length) bits.push(`上轮未测出 ${ins.join("、")}`);
+    priorParsed.textContent = bits.length ? `已识别：${bits.join("；")}` : "JSON 可解析，但没找到报告字段";
+  } catch {
+    priorParsed.textContent = "不是合法 JSON，创建时会被忽略";
+  }
+});
+
+document.getElementById("loadPriorBtn").addEventListener("click", async () => {
+  const id = document.getElementById("priorReportId").value.trim();
+  if (!id) {
+    priorParsed.textContent = "先填一个报告 ID";
+    return;
+  }
+  priorParsed.textContent = "拉取中…";
+  try {
+    const r = await fetch(`/api/interview/${encodeURIComponent(id)}/report`);
+    const j = await r.json();
+    if (!j.ok) {
+      priorParsed.textContent = j.error || "拉取失败";
+      return;
+    }
+    priorBox.value = JSON.stringify(j.report, null, 2);
+    priorBox.dispatchEvent(new Event("input"));
+  } catch (err) {
+    priorParsed.textContent = `拉取失败：${err.message}`;
+  }
+});
+
 // --- 创建 ---
 const form = document.getElementById("createForm");
 const msg = document.getElementById("createMsg");
@@ -68,6 +146,9 @@ form.addEventListener("submit", async (e) => {
     candidate_name: document.getElementById("candidate").value.trim(),
     job_role: document.getElementById("jobRole").value.trim(),
     resume_text: document.getElementById("resume").value.trim(),
+    resume_filename: resumeFileName,
+    resume_file_b64: resumeFileB64,
+    prior_report_json: priorReportJson,
     config: {
       job_role: document.getElementById("jobRole").value.trim(),
       questions_target: Number(document.getElementById("qTarget").value),

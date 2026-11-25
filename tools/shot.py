@@ -135,6 +135,12 @@ def main():
         txt = cdp.eval("document.body.innerText")
         assert "新建" in txt and "面试" in txt, "首页没找到新建表单"
         assert "能力维度" in txt, "首页没找到维度面板"
+        # 接入层入口：没有这两块就等于"简历/报告接入"在界面上不存在
+        assert "上传简历文件" in txt, "首页没有简历上传入口"
+        assert "接上一轮报告" in txt, "首页没有上一轮报告入口"
+        # PWA 元信息：加到主屏要用
+        assert cdp.eval(
+            "!!document.querySelector('link[rel=manifest]')") is True, "缺 manifest"
         cdp.shot("s1-console.png")
 
         # ---------------- 2. 建面试 + 面试页 ----------------
@@ -219,6 +225,24 @@ def main():
             assert kw in txt, f"报告页缺「{kw}」"
         score = cdp.eval("(() => { const e = document.querySelector('.score-big'); return e ? e.innerText : ''; })()")
         print("   总分 =", score)
+        assert "本次面试的输入材料" in txt, "报告页没有输入材料卡片"
+        # 导出按钮必须真的能下到东西，不能只是两个 <a>
+        exp = cdp.eval("""
+            (async () => {
+              const out = {};
+              for (const f of ['json', 'md', 'html']) {
+                const r = await fetch('/api/interview/' + IID + '/export?format=' + f);
+                const t = await r.text();
+                out[f] = [r.status, t.length];
+              }
+              return JSON.stringify(out);
+            })()
+        """.replace("IID", repr(iid)))
+        print("   导出三出口 [status, 字节] =", exp)
+        import json as _json
+        for fmt, (st, ln) in _json.loads(exp).items():
+            assert st == 200, f"导出 {fmt} 返回 {st}"
+            assert ln > 1000, f"导出 {fmt} 只有 {ln} 字节"
         cdp.shot("s4-report.png")
         cdp.shot("s5-report-full.png", full=True)
 

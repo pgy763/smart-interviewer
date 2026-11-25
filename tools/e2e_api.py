@@ -77,6 +77,7 @@ def main():
         "candidate_name": "端到端测试",
         "job_role": "后端开发实习生",
         "resume_text": "做了 IM 项目，自研二进制协议",
+        "tenant": "e2e",
         "config": {
             "job_role": "后端开发实习生",
             "questions_target": 4,
@@ -164,7 +165,7 @@ def main():
         check(f"上报 {kind}", r.json().get("ok") is True, r.text[:120])
 
     print("7. 结束 + 报告")
-    r = c.post(f"/api/interview/{iid}/finish", json={"reason": "脚本跑完"})
+    r = c.post(f"/api/interview/{iid}/finish", json={"reason": "脚本跑完", "tenant": "e2e"})
     check("结束 ok", r.json().get("ok") is True, r.text[:160])
 
     r = c.get(f"/api/interview/{iid}/report")
@@ -197,6 +198,134 @@ def main():
     t = c.get(f"/report/{iid}").text
     for kw in ["能力维度", "风险信号", "成本核算", "这份报告不做什么", "证据不足"]:
         check(f"报告含「{kw}」", kw in t)
+
+    # ------------------------------------------------------------------
+    # 10-14 接入层 / 导出 / 商业化
+    # 单独成段，是因为它们都不依赖"把一场面试完整答完"，
+    # 出错时能立刻分辨是接入层的问题还是主链路的问题。
+    # ------------------------------------------------------------------
+    print("10. 简历文件接入（DOCX → 解析出技能与项目）")
+    import docx as _docx
+
+    _doc = _docx.Document()
+    for ln in ["文博玉", "中北大学 软件工程 2024.09-2028.06", "专业技能",
+               "Java Spring Boot Netty MySQL Redis Docker",
+               "工作经历", "某科技公司 后端开发 2025.07-2025.11",
+               "项目经历", "鱼见 IM 即时通讯系统",
+               "· 基于 Netty 自研 18 字节二进制协议",
+               "· Redis INCR 发号 + 三层幂等去重"]:
+        _doc.add_paragraph(ln)
+    _buf = io.BytesIO()
+    _doc.save(_buf)
+    docx_b64 = "data:application/vnd.openxmlformats-officedocument" \
+               ".wordprocessingml.document;base64," + base64.b64encode(_buf.getvalue()).decode()
+
+    r = c.post("/api/interview", json={
+        "candidate_name": "接入层测试",
+        "job_role": "后端开发实习生",
+        "resume_file_b64": docx_b64,
+        "resume_filename": "resume.docx",
+        "tenant": "e2e",
+        "config": {"questions_target": 2, "followup_max": 0},
+    })
+    j = r.json()
+    check("带文件创建 ok", j.get("ok") is True, r.text[:200])
+    iid2 = j.get("interview_id")
+    prof = j.get("resume_profile") or {}
+    check("解析出技能", len(prof.get("skills") or []) >= 5, prof.get("skills"))
+    check("技能含 Netty", "Netty" in (prof.get("skills") or []), prof.get("skills"))
+    titles = [x.get("title") if isinstance(x, dict) else x
+              for x in (prof.get("projects") or [])]
+    check("解析出项目", "鱼见 IM 即时通讯系统" in titles, titles)
+    check("解析出来源是 docx", prof.get("source") == "docx", prof.get("source"))
+    check("解析出年限", prof.get("years") is not None, prof.get("years"))
+    check("首题引用了简历里的项目", "鱼见 IM" in (j["first"]["question"] or ""),
+          j["first"]["question"])
+    check("返回配额信息", isinstance(j.get("quota"), dict), j.get("quota"))
+
+    print("11. 上一轮报告接入（报告 → 本轮的追问点）")
+    r = c.post("/api/interview", json={
+        "candidate_name": "二次面试",
+        "job_role": "后端开发实习生",
+        "resume_text": "Java Redis",
+        "prior_report_json": json.dumps(rep, ensure_ascii=False),
+        "tenant": "e2e",
+        "config": {"questions_target": 2, "followup_max": 0},
+    })
+    j = r.json()
+    check("带上一轮报告创建 ok", j.get("ok") is True, r.text[:200])
+    prior = j.get("prior_report") or {}
+    check("吸收到上轮综合分", prior.get("overall") == d.get("overall"),
+          (prior.get("overall"), d.get("overall")))
+    check("吸收到上轮未测出维度", bool(prior.get("insufficient_dims")),
+          prior.get("insufficient_dims"))
+    check("生成本轮追问点", bool(prior.get("probe_points")), prior.get("probe_points"))
+    check("首题针对上轮缺口", "上轮" in (j["first"]["question"] or ""),
+          j["first"]["question"])
+
+    print("11b. 面试中重传材料")
+    r = c.post(f"/api/interview/{iid2}/material", json={
+        "resume_text": "Java Netty Redis Kafka 分布式",
+        "resume_filename": "",
+    })
+    j = r.json()
+    check("重传材料 ok", j.get("ok") is True, r.text[:200])
+    check("重传返回更新的字段", "resume_profile" in (j.get("updated") or []),
+          j.get("updated"))
+
+    print("12. 报告三出口")
+    # 注意不能对 md 做 .lower()：标题里的 "AI" 是大写，lower 之后反而匹配不到
+    for fmt, kw, ci in [("json", '"overall"', False),
+                        ("md", "AI 面试分析报告", False),
+                        ("html", "<!doctype html>", True)]:
+        r = c.get(f"/api/interview/{iid}/export", params={"format": fmt})
+        check(f"导出 {fmt} 200", r.status_code == 200, r.status_code)
+        hay = r.text.lower() if ci else r.text
+        check(f"导出 {fmt} 内容正确", kw in hay, r.text[:80])
+    r = c.get(f"/api/interview/{iid}/export",
+              params={"format": "md", "download": 1})
+    check("download=1 带附件头",
+          "attachment" in (r.headers.get("content-disposition") or ""),
+          r.headers.get("content-disposition"))
+    r = c.get(f"/api/interview/{iid}/export", params={"format": "xml"})
+    check("未知格式退回 json", r.status_code == 200 and '"overall"' in r.text)
+
+    print("13. 配额与预算（商业化）")
+    r = c.get("/api/quota", params={"tenant": "e2e"})
+    j = r.json()
+    check("配额接口 ok", j.get("ok") is True, r.text[:160])
+    q = j.get("quota") or {}
+    check("配额有上限与用量", isinstance(q.get("limit"), int) and q.get("used", 0) > 0, q)
+    check("配额带账本成本", isinstance(j.get("cost"), dict) and "total_cny" in j["cost"],
+          list(j)[:10])
+    # 造一个额度为 0 的租户，验证超限是 402 而不是 500
+    import sqlite3 as _sql
+    from pathlib import Path as _P
+
+    _conn = _sql.connect(_P("data/interview.db"))
+    try:
+        _conn.execute(
+            "INSERT INTO tenant (id,name,plan,monthly_limit,budget_cny,created_at,note)"
+            " VALUES ('blocked','被停用','trial',0,1.0,0,'e2e')"
+            " ON CONFLICT(id) DO UPDATE SET monthly_limit=0"
+        )
+        _conn.commit()
+    finally:
+        _conn.close()
+    r = c.post("/api/interview", json={
+        "candidate_name": "超限测试", "job_role": "后端",
+        "tenant": "blocked", "config": {"questions_target": 1},
+    })
+    check("额度用尽返回 402", r.status_code == 402, r.status_code)
+    check("402 附带配额明细", isinstance((r.json() or {}).get("quota"), dict), r.text[:160])
+
+    print("14. 审计日志")
+    r = c.get("/api/audit", params={"tenant": "e2e", "limit": 20})
+    j = r.json()
+    check("审计接口 ok", j.get("ok") is True, r.text[:160])
+    actions = [x.get("action") for x in (j.get("rows") or [])]
+    check("记录到建场次", "interview.create" in actions, actions[:8])
+    check("记录到结束", "interview.finish" in actions, actions[:8])
 
     print()
     print(f"PASS={PASS} FAIL={FAIL}")

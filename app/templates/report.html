@@ -4,6 +4,13 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>面试报告 · {{ r.interview.candidate }}</title>
+<link rel="manifest" href="/static/manifest.webmanifest" />
+<meta name="theme-color" content="#2563eb" media="(prefers-color-scheme: light)" />
+<meta name="theme-color" content="#0d1015" media="(prefers-color-scheme: dark)" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-title" content="AI 面试" />
+<link rel="icon" href="/static/icon.svg" type="image/svg+xml" />
+<link rel="apple-touch-icon" href="/static/icon.svg" />
 <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
@@ -13,6 +20,8 @@
     <a href="/" class="sm">← 控制台</a>
     <div class="row" style="gap:8px">
       <a href="/interview/{{ r.interview.id }}" class="sm">回到面试</a>
+      <a href="/api/interview/{{ r.interview.id }}/export?format=md&download=1" class="sm">导出 Markdown</a>
+      <a href="/api/interview/{{ r.interview.id }}/export?format=json&download=1" class="sm">导出 JSON</a>
       <button class="sm primary" onclick="window.print()">打印 / 存为 PDF</button>
     </div>
   </div>
@@ -171,6 +180,42 @@
     {% endfor %}
   </div>
 
+  <!-- 输入材料：这场面试是凭什么跑的 -->
+  {% if r.material and (r.material.resume.skills or r.material.resume.projects or r.material.prior_report) %}
+  <div class="card" style="padding:14px 16px;margin-top:14px">
+    <div style="font-weight:600;font-size:13.5px;margin-bottom:8px">本次面试的输入材料</div>
+    <div class="kv">
+      {% if r.material.resume.source %}
+      <div><span class="k">简历来源</span><span class="v">{{ r.material.resume.source }}
+        {% if r.material.resume.chars %}（{{ r.material.resume.chars }} 字）{% endif %}</span></div>
+      {% endif %}
+      {% if r.material.resume.years %}
+      <div><span class="k">识别年限</span><span class="v">约 {{ '%g'|format(r.material.resume.years) }} 年</span></div>
+      {% endif %}
+      {% if r.material.resume.skills %}
+      <div><span class="k">识别技能</span><span class="v">{{ r.material.resume.skills|join('、') }}</span></div>
+      {% endif %}
+      {% if r.material.resume.projects %}
+      <div><span class="k">识别项目</span><span class="v">{{ r.material.resume.projects|join('；') }}</span></div>
+      {% endif %}
+      {% if r.material.resume.llm_summary %}
+      <div><span class="k">模型摘要</span><span class="v">{{ r.material.resume.llm_summary }}</span></div>
+      {% endif %}
+      {% if r.material.prior_report %}
+      <div><span class="k">接上一轮</span><span class="v">
+        {% if r.material.prior_report.overall %}综合分 {{ '%.1f'|format(r.material.prior_report.overall) }}{% endif %}
+        {% if r.material.prior_report.insufficient_dims %} · 上轮未测出 {{ r.material.prior_report.insufficient_dims|join('、') }}{% endif %}
+      </span></div>
+      {% endif %}
+    </div>
+    {% if r.material.resume.warnings %}
+    <div class="muted" style="font-size:12px;margin-top:8px">
+      解析提示：{{ r.material.resume.warnings|join('；') }}
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
+
   <!-- 成本 -->
   <div class="card" style="padding:14px 16px;margin-top:14px">
     <div class="row" style="justify-content:space-between;margin-bottom:8px">
@@ -186,7 +231,23 @@
       {% for model, v in r.cost.by_model.items() %}
       <div><span class="k">{{ model }}</span><span class="v">¥{{ '%.4f'|format(v) }}</span></div>
       {% endfor %}
+      {% if r.cost.unpriced_models %}
+      <div><span class="k">未登记价目</span><span class="v">{{ r.cost.unpriced_models|join('、') }}
+        <span class="tag warn">按 0 计</span></span></div>
+      {% endif %}
+      {% if r.budget and r.budget.limit_cny is not none %}
+      <div><span class="k">预算上限</span><span class="v">¥{{ '%.4f'|format(r.budget.limit_cny) }}
+        {% if r.budget.tripped %}<span class="tag warn">已熔断 {{ r.budget.tripped }} 次</span>
+        {% elif r.budget.exhausted %}<span class="tag warn">已达上限</span>
+        {% else %}<span class="tag ok">未触发</span>{% endif %}</span></div>
+      {% endif %}
     </div>
+    {% if r.budget and r.budget.tripped %}
+    <div class="muted" style="font-size:12px;margin-top:8px">
+      本场有 {{ r.budget.tripped }} 次调用因超出预算上限被降级为规则化实现——
+      面试没有中断，但那几轮题目/分析不是模型给的。成本表里的金额只计真实调用。
+    </div>
+    {% endif %}
   </div>
 
   <!-- 时长建议 + 局限 -->

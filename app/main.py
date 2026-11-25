@@ -55,6 +55,27 @@ def _err(msg: str, status: int = 400, **extra) -> JSONResponse:
     return _json(body, status)
 
 
+def _b64(v) -> bytes:
+    """前端传 base64（可能是 data URI）。解不开就当没传，不抛。
+
+    为什么容忍 data URI：前端用 FileReader.readAsDataURL 最省事，它会带着
+    `data:application/pdf;base64,` 前缀；但接口文档里写的是裸 base64。
+    两种都收，少一个"为什么我传了却解析失败"的排查。
+    """
+    if not v:
+        return b""
+    try:
+        import base64
+        import binascii
+
+        s = str(v).strip()
+        if s.startswith("data:") and "," in s:
+            s = s.split(",", 1)[1]
+        return base64.b64decode(s, validate=False)
+    except (binascii.Error, ValueError, TypeError):
+        return b""
+
+
 async def _body(request: Request) -> dict:
     try:
         raw = await request.body()
@@ -124,11 +145,152 @@ async def api_create(request: Request):
     if not isinstance(cfg, dict):
         return _err("config 必须是对象")
     cfg.setdefault("job_role", job_role)
+
+    tenant = (body.get("tenant") or "default").strip() or "default"
+
+    # 配额：能不能再开一场。这里返回 402 而不是 500 —— 额度用尽是业务状态，
+    # 不是服务器错误；前端要据此显示"联系管理员"而不是"系统故障"。
+    from app.billing.quota import QuotaExceeded, check_quota, consume
+
+    q = check_quota(tenant)
+    if not q.allowed:
+        return _json({"ok": False, "error": q.reason, "quota": {
+            "used": q.used, "limit": q.limit, "period": q.period,
+            "plan": q.plan,
+        }}, 402)
+
+    # 接入层：简历文件 > 粘贴文本；上一轮报告可选
+    from app.providers.llm import get_provider
+    from app.intake import build_prior_report, parse_report_json, profile_from_any
+
+    resume_profile: dict = {}
+    material: dict = {}
+    warnings: list[str] = []
     try:
-        out = sess.manager.create(name, job_role, resume, cfg)
+        prof = profile_from_any(
+            text=resume,
+            data=_b64(body.get("resume_file_b64")),
+            filename=body.get("resume_filename") or "",
+            provider=get_provider(),
+        )
+        resume_profile = prof.to_dict()
+        material["resume"] = {"source": prof.source, "chars": prof.raw_chars,
+                              "filename": body.get("resume_filename") or ""}
+        warnings.extend(prof.warnings or [])
+        if not resume:
+            resume = prof.prompt_text(limit=1200)
+    except Exception as e:  # 简历解析不该让人开不了面试
+        warnings.append(f"简历解析未成功：{type(e).__name__}: {e}（已退化为纯文本模式）")
+
+    prior: dict = {}
+    raw_prior = body.get("prior_report_json")
+    if raw_prior:
+        try:
+            parsed = parse_report_json(raw_prior if isinstance(raw_prior, str)
+                                       else json.dumps(raw_prior, ensure_ascii=False))
+            prior = build_prior_report(parsed).to_dict()
+            material["prior_report"] = {"source_id": prior.get("source_id")}
+        except Exception as e:
+            warnings.append(f"上一轮报告解析未成功：{e}")
+
+    try:
+        out = sess.manager.create(name, job_role, resume, cfg,
+                                  resume_profile=resume_profile,
+                                  prior_report=prior,
+                                  material=material,
+                                  tenant=tenant)
     except ValueError as e:
         return _err(str(e))
-    return _json({"ok": True, **out})
+    consume(tenant)
+    return _json({"ok": True, **out, "warnings": warnings,
+                  "resume_profile": resume_profile, "prior_report": prior,
+                  "quota": {"used": q.used + 1, "limit": q.limit,
+                            "remaining": max(0, q.remaining - 1)}})
+
+
+async def api_material(request: Request):
+    """面试进行中重传简历 / 粘贴上一轮报告。
+
+    为什么单独一个接口而不复用 create：面试已经开跑了，换个候选人来重开会
+    丢掉已有问答；而"刚拿到一份更好的简历"是真的会中途发生的事。
+    """
+    iid = request.path_params["iid"]
+    row = db.get_interview(iid)
+    if not row:
+        return _err("面试不存在", 404)
+    body = await _body(request)
+    from app.providers.llm import get_provider
+    from app.intake import build_prior_report, parse_report_json, profile_from_any
+
+    warnings: list[str] = []
+    patch: dict = {}
+    if body.get("resume_file_b64") or body.get("resume_filename") or body.get("resume_text"):
+        try:
+            prof = profile_from_any(
+                text=body.get("resume_text") or "",
+                data=_b64(body.get("resume_file_b64")),
+                filename=body.get("resume_filename") or "",
+                provider=get_provider(),
+            )
+            patch["resume_profile"] = prof.to_dict()
+            patch["resume_text"] = body.get("resume_text") or prof.prompt_text(1200)
+            warnings.extend(prof.warnings or [])
+        except Exception as e:
+            return _err(f"简历解析失败：{e}")
+    if body.get("prior_report_json"):
+        try:
+            parsed = parse_report_json(body["prior_report_json"])
+            patch["prior_report"] = build_prior_report(parsed).to_dict()
+        except Exception as e:
+            return _err(f"报告解析失败：{e}")
+    if not patch:
+        return _err("没有可更新的材料")
+    db.update_material(iid, **patch)
+    return _json({"ok": True, "updated": list(patch.keys()), "warnings": warnings})
+
+
+async def api_export(request: Request):
+    """导出报告。format=json|md|html，未知值退回 json。"""
+    iid = request.path_params["iid"]
+    fmt = (request.query_params.get("format") or "json").lower()
+    from app.report.builder import build_report
+    from app.report import export as exp
+
+    try:
+        rep = build_report(iid)
+    except KeyError:
+        return _err("面试不存在", 404)
+    body, ctype, ext = exp.export(rep, fmt)
+    from starlette.responses import Response
+
+    resp = Response(body, media_type=ctype)
+    # attachment 只在 ?download=1 时加：默认在浏览器里直接看，
+    # 要存档再下载。两种场景都有人用，用一个参数分开。
+    if request.query_params.get("download") in ("1", "true", "yes"):
+        fname = exp.filename(rep, ext)
+        resp.headers["Content-Disposition"] = (
+            f"attachment; filename*=UTF-8''{__import__('urllib.parse', fromlist=['quote']).quote(fname)}"
+        )
+    return resp
+
+
+async def api_quota(request: Request):
+    tenant = (request.query_params.get("tenant") or "default").strip()
+    from app.billing.quota import check_quota, ensure_tenant, ledger_summary
+
+    ensure_tenant(tenant, monthly_limit=settings.monthly_quota)
+    q = check_quota(tenant)
+    return _json({"ok": True, **ledger_summary(tenant),
+                  "quota": {"allowed": q.allowed, "used": q.used, "limit": q.limit,
+                            "remaining": q.remaining, "period": q.period,
+                            "plan": q.plan, "reason": q.reason}})
+
+
+async def api_audit(request: Request):
+    tenant = request.query_params.get("tenant")
+    from app.billing.quota import list_audit
+
+    return _json({"ok": True, "rows": list_audit(tenant, limit=50)})
 
 
 async def api_get_interview(request: Request):
@@ -142,7 +304,7 @@ async def api_get_interview(request: Request):
     return _json({
         "ok": True,
         "interview": row,
-        "provider": s.provider.name if s else row.get("provider"),
+        "provider": (s.raw_provider.name if s else row.get("provider")),
         "turns": turns,
         "pending": pending,
         "dimensions": DIMENSIONS,
@@ -249,6 +411,14 @@ async def api_finish(request: Request):
     # 再点一次「结束面试」不能把它改写成 aborted —— 那会让报告显示
     # 「会话被主动终止」，把一场完整面试写成中途退出。
     if row.get("status") == "finished" and not aborted:
+        # 即使状态已经是 finished（答完最后一题时 submit 自动置的），也要落一条审计：
+        # 客户问「这场什么时候结束的」时，不能因为它自动结束就没有记录。
+        from app.billing.quota import audit
+
+        audit("interview.finish", tenant=(body.get("tenant") or "default"),
+              interview_id=iid, actor="console",
+              detail={"status": "finished", "reason": reason, "noop": True},
+              outcome="ok")
         return _json({"ok": True, "status": "finished", "noop": True})
     # 只有明确声明 aborted（候选人关页面、掉线不回来）才算异常终止。
     # 「面试官点结束」是正常流程，不能记成 aborted，否则报告里
@@ -256,6 +426,12 @@ async def api_finish(request: Request):
     status = "aborted" if aborted else "finished"
     db.set_interview_status(iid, status, ended=True,
                            abort_reason=reason if aborted else None)
+    from app.billing.quota import audit
+
+    audit("interview.finish", tenant=(body.get("tenant") or "default"),
+          interview_id=iid, actor="console",
+          detail={"status": status, "reason": reason},
+          outcome="ok" if not aborted else "aborted")
     return _json({"ok": True, "status": status})
 
 
@@ -384,8 +560,12 @@ routes = [
     Route("/api/interview/{iid}/pacing", api_pacing),
     Route("/api/interview/{iid}/finish", api_finish, methods=["POST"]),
     Route("/api/interview/{iid}/report", api_report),
+    Route("/api/interview/{iid}/export", api_export),
+    Route("/api/interview/{iid}/material", api_material, methods=["POST"]),
     Route("/api/interviews", api_list),
     Route("/api/cost", api_cost),
+    Route("/api/quota", api_quota),
+    Route("/api/audit", api_audit),
     Route("/api/health", api_health),
     Route("/api/provider/reset", api_reset_provider, methods=["POST"]),
     WebSocketRoute("/ws/{iid}", ws_interview),

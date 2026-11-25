@@ -120,7 +120,7 @@ PROMPT_QUESTION = """你是{company_role}的资深技术面试官，正在面试
 
 # 候选人简历摘要
 {resume}
-
+{prior_hint}
 # 输出（严格 JSON，不要其它文字）
 {{"question": "题目文本", "target_dim": "考察维度key", "why": "一句话说明这题想看出什么"}}
 """
@@ -213,6 +213,79 @@ PROMPT_VISION = """你在分析一张在线面试的摄像头画面（可能包�
 # ---------------------------------------------------------------------------
 # Mock 实现
 # ---------------------------------------------------------------------------
+PROMPT_RESUME_DIGEST = """你在帮面试官准备一场技术面试。下面是候选人的简历摘要。
+
+# 任务
+1. 用一句话概括这份简历的技术方向与项目密度（不超过 60 字）。
+2. 给出 3 个**值得追问**的点，每个一行，不超过 40 字。
+
+# 约束
+- 不要评价候选人好坏，不要给分数或录用建议。
+- 不要复述简历里的原句。
+- 追问点必须指向简历里**有提到但没展开**的地方（比如只写了用了 Redis 没写怎么用）。
+- 如果简历信息不足，就给该岗位的通用追问点。
+
+# 简历摘要
+{resume}
+
+# 输出（严格 JSON，不要其它文字）
+{{"summary": "一句话概括", "probe_points": ["追问点1", "追问点2", "追问点3"]}}
+"""
+
+# 接入层 → prompt 的两个适配函数
+#
+# 为什么不在节点里拼字符串：prompt 的拼接规则属于 provider 的职责边界，
+# 换一个 provider（比如 OpenAI）时它有自己的 prompt 习惯，改一处就够。
+# 这两条都必须**永不抛异常**——简历解析结果可能缺字段，而"少一个字段"
+# 绝不该让整场面试出不了题。
+# ---------------------------------------------------------------------------
+def _resume_for_prompt(ctx: dict) -> str:
+    """优先用结构化档案拼摘要，退化到原文截断。
+
+    结构化档案（技能 + 项目标题 + 两条要点）比原文更省 token、信息密度更高；
+    但简历解析失败时档案是空的，这时必须能用原文兜底，否则整场面试会退化成
+    通用题——那是最差的结果，比多花几百 token 差得多。
+    """
+    prof = ctx.get("resume_profile") or {}
+    if isinstance(prof, dict) and (prof.get("skills") or prof.get("projects")):
+        parts = []
+        if prof.get("skills"):
+            parts.append("技能：" + "、".join(str(s) for s in prof["skills"][:18]))
+        for p in (prof.get("projects") or [])[:4]:
+            if not isinstance(p, dict):
+                continue
+            head = str(p.get("title") or "项目")[:60]
+            bullets = [str(b)[:80] for b in (p.get("bullets") or [])[:2] if b]
+            parts.append(head + ("；" + "；".join(bullets) if bullets else ""))
+        if prof.get("years"):
+            parts.append(f"经验约 {prof['years']} 年")
+        if prof.get("llm_summary"):
+            parts.append("画像：" + str(prof["llm_summary"])[:200])
+        if parts:
+            return "\n".join(parts)[:1200]
+    return (ctx.get("resume") or "（无）")[:1200]
+
+
+def _prior_hint(prior: dict) -> str:
+    """上一轮报告的缺口提示。空 dict 时返回空串（prompt 里就是空行）。"""
+    if not isinstance(prior, dict) or not prior:
+        return ""
+    bits = []
+    if prior.get("overall") is not None:
+        bits.append(f"上一轮综合分 {prior['overall']}")
+    if prior.get("insufficient_dims"):
+        bits.append("上一轮这些维度证据不足：" + "、".join(str(x) for x in prior["insufficient_dims"][:5]))
+    if prior.get("risk_level") in ("warn", "high"):
+        bits.append(f"上一轮风险信号 {prior['risk_level']}")
+    for p in (prior.get("probe_points") or [])[:2]:
+        bits.append(f"建议重点问：{p}")
+    if not bits:
+        return ""
+    return "\n# 上一轮面试（同一候选人）\n" + "；".join(bits) + "\n" + \
+        "本轮要优先把上一轮没测出来的维度问出来，但不要重复上一轮的原题。\n"
+
+
+# ---------------------------------------------------------------------------
 QUESTION_BANK = {
     "concept": [
         "你说你做过即时通讯系统，消息的「不丢不重不乱序」具体是怎么保证的？",
@@ -245,6 +318,37 @@ class MockProvider:
         role = ctx.get("job_role", "")
         target = ctx.get("target_dim", "comprehension")
         asked = ctx.get("asked", [])
+
+        # 规则化实现也要吃「材料」——否则演示时"上传简历/接上一轮报告"这件事
+        # 在 mock 通道下完全看不出效果，用户会以为功能没做。
+        prior = ctx.get("prior_report") or {}
+        probe = [p for p in (prior.get("probe_points") or [])
+                 if p and p not in asked]
+        if probe:
+            pick = probe[0]
+            data = {
+                "question": pick,
+                "target_dim": target,
+                "why": "上一轮这场面试的同类维度没测出来，这次换成更具体的问题再问一次。",
+            }
+            return LLMResult(True, data, json.dumps(data, ensure_ascii=False),
+                             settings.text_model, self.name, 0, 0,
+                             int((time.time() - started) * 1000))
+
+        projects = ((ctx.get("resume_profile") or {}).get("projects") or [])
+        titles = [p.get("title") for p in projects if p.get("title")]
+        # 只在第一道题用简历里的项目名，避免整场都在问同一个项目
+        if titles and not asked:
+            pick = f"简历里写了「{titles[0]}」，挑一个最难的模块讲清楚：它解决什么问题、你具体做了什么、怎么验证的。"
+            data = {
+                "question": pick,
+                "target_dim": target,
+                "why": "从简历里真实存在的项目切入，比通用题库更能看出候选人是否真的做过。",
+            }
+            return LLMResult(True, data, json.dumps(data, ensure_ascii=False),
+                             settings.text_model, self.name, 0, 0,
+                             int((time.time() - started) * 1000))
+
         pool: list[str] = []
         for group in QUESTION_BANK.values():
             pool.extend(group)
@@ -335,6 +439,24 @@ class MockProvider:
         return LLMResult(True, data, json.dumps(data, ensure_ascii=False),
                          settings.vision_model, self.name)
 
+    def resume_digest(self, ctx: dict) -> LLMResult:
+        """简历增强：一句话画像 + 3 个值得追问的点。
+
+        mock 版不"理解"简历，只按规则给：拿技能数量与项目数量说明概况，
+        再用项目标题生成追问点。这样离线演示时这块也有内容，不会空着。
+        """
+        text = (ctx.get("resume") or "").strip()
+        heads = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        n_skill = len([h for h in heads if "技能" in h])
+        projects = [h for h in heads if h.startswith("项目：")]
+        summary = f"材料约 {len(text)} 字，识别到 {len(projects)} 个可追问的项目条目。"
+        points = [f"{p[3:][:40]} 里的技术选型理由" for p in projects[:3]]
+        if not points:
+            points = ["最近一个项目里最难的技术决定", "有没有上线、怎么验证的", "如果重做会改哪里"]
+        data = {"summary": summary, "probe_points": points}
+        return LLMResult(True, data, json.dumps(data, ensure_ascii=False),
+                         settings.text_model, self.name)
+
 
 # ---------------------------------------------------------------------------
 # DashScope 实现
@@ -401,7 +523,8 @@ class DashScopeProvider:
             target_dim=ctx.get("target_dim", "理解"),
             difficulty=ctx.get("difficulty", "medium"),
             asked="\n".join(f"- {q}" for q in ctx.get("asked", [])) or "（还没问）",
-            resume=(ctx.get("resume") or "（无）")[:1200],
+            resume=_resume_for_prompt(ctx),
+            prior_hint=_prior_hint(ctx.get("prior_report") or {}),
         )
         r = self._chat("question", prompt, ctx.get("interview_id"))
         if r.ok and r.data.get("question"):
@@ -473,6 +596,23 @@ class DashScopeProvider:
             return LLMResult(True, data, text, settings.vision_model, self.name, 0, 0, latency)
         except Exception as e:  # pragma: no cover
             return MockProvider().vision(ctx)
+
+
+    def resume_digest(self, ctx: dict) -> LLMResult:
+        """用真实模型读简历摘要，产出"一句话画像 + 3 个值得追问的点"。
+
+        约束刻意写得紧：不许他复述简历、不许他评价候选人，只许提"还能问什么"。
+        原因是这份输出会进 prompt 和报告首页，一旦写成"该候选人技术扎实"，
+        报告就变成了模型在给结论——那违反了本项目"分数由规则算"的边界。
+        """
+        prompt = PROMPT_RESUME_DIGEST.format(resume=(ctx.get("resume") or "（无）")[:1200])
+        r = self._chat("resume_digest", prompt, ctx.get("interview_id"))
+        if r.ok and isinstance(r.data, dict):
+            return r
+        fb = MockProvider().resume_digest(ctx)
+        fb.error = r.error or "模型输出不符合 schema，已降级规则摘要"
+        fb.model = r.model
+        return fb
 
 
 # ---------------------------------------------------------------------------

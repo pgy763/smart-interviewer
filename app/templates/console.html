@@ -4,6 +4,13 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>AI 面试观察助手 · 控制台</title>
+<link rel="manifest" href="/static/manifest.webmanifest" />
+<meta name="theme-color" content="#2563eb" media="(prefers-color-scheme: light)" />
+<meta name="theme-color" content="#0d1015" media="(prefers-color-scheme: dark)" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-title" content="AI 面试" />
+<link rel="icon" href="/static/icon.svg" type="image/svg+xml" />
+<link rel="apple-touch-icon" href="/static/icon.svg" />
 <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
@@ -11,7 +18,7 @@
   <h1>AI 面试观察助手</h1>
   <div class="sub">
     面向面试官的辅助观察工具：结构化的出题与追问、面试过程参数可调、
-    基于画面与语音的实时观察、可导出的分析报告。**不做录用判断**。
+    基于画面与语音的实时观察、可导出的分析报告。<strong>不做录用判断</strong>。
   </div>
 
   <div class="row wrap" style="margin-bottom:20px;gap:10px">
@@ -36,9 +43,24 @@
       <label for="jobRole">岗位</label>
       <input id="jobRole" name="job_role" value="后端开发实习生" />
 
-      <label for="resume">简历要点（可选，会作为出题上下文）</label>
+      <label for="resume">简历（可选，会作为出题上下文）</label>
       <textarea id="resume" class="grow" rows="3"
-        placeholder="例如：Netty 自研二进制协议、Redis INCR 会话序号、159 项协议断言"></textarea>
+        placeholder="直接粘要点，或上传 PDF/DOCX，上传后自动解析出技能与项目"></textarea>
+      <div class="row wrap" style="gap:10px;align-items:center;margin-top:6px">
+        <input id="resumeFile" type="file" accept=".pdf,.docx,.txt,.md" style="display:none" />
+        <button type="button" class="sm ghost" id="pickFileBtn">上传简历文件</button>
+        <span class="muted" id="fileHint" style="font-size:12px">支持 PDF / DOCX / TXT，≤8MB</span>
+      </div>
+      <div class="muted" id="fileParsed" style="font-size:12px;margin-top:6px"></div>
+
+      <label for="priorReport">接上一轮报告（可选，粘贴报告 JSON 或填报告 ID）</label>
+      <textarea id="priorReport" class="grow" rows="2"
+        placeholder="把上一场的 /api/interview/{id}/report 的 JSON 贴进来，本场会针对上轮没测出来的维度补问"></textarea>
+      <div class="row wrap" style="gap:10px;align-items:center;margin-top:6px">
+        <input id="priorReportId" placeholder="或填上一场报告 ID" style="flex:1;min-width:180px" />
+        <button type="button" class="sm ghost" id="loadPriorBtn">按 ID 拉取</button>
+      </div>
+      <div class="muted" id="priorParsed" style="font-size:12px;margin-top:6px"></div>
 
       <div class="row" style="margin-top:14px;gap:12px">
         <div class="grow-1">

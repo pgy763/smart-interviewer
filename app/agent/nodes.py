@@ -147,6 +147,11 @@ def node_generate(state: TurnState, runtime: InterviewRuntime) -> dict:
         "difficulty": state.get("difficulty") or cfg.difficulty,
         "asked": asked[-8:],
         "resume": state.get("resume") or "",
+        # 接入层的两个产物直接透传给 provider：
+        # - resume_profile 让模型知道"这人做过什么"，而不是只看到一段被截断的散文
+        # - prior_report 让模型知道"上一轮哪几个维度没测出来"，这是二次面试的全部意义
+        "resume_profile": state.get("resume_profile") or {},
+        "prior_report": state.get("prior_report") or {},
     })
 
     q = (res.data or {}).get("question") or "请介绍一下你最近做的一个项目，以及你在其中负责的部分。"

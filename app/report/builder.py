@@ -114,6 +114,38 @@ def build_report(iid: str) -> dict:
     calls = db.list_llm_calls(iid)
     cost = estimate_cost(calls)
 
+    # 预算熔断：这一场有没有被保险丝降级过。
+    # 熔断信息必须进报告——否则客户看到"成本 ¥0.4"会以为我们省着花，
+    # 实际是后面几轮用了规则化实现，质量与成本都变过。
+    session_obj = manager.get(iid)
+    budget = session_obj.guard.to_dict() if session_obj else {
+        "limit_cny": None, "spent_cny": None, "tripped": 0, "exhausted": False,
+        "note": "进程已重启，本场熔断计数不可得",
+    }
+
+    # 接入层产物：这场面试是带着什么材料跑的。
+    # 报告要能回答"你凭这份简历出的题"，否则面试官没法复盘题目是否对路。
+    mat = db.get_material(iid)
+    rp = mat.get("resume_profile") or {}
+    pr = mat.get("prior_report") or {}
+    material = {
+        "resume": {
+            "source": (mat.get("material") or {}).get("resume", {}).get("source") or "",
+            "chars": rp.get("raw_chars"),
+            "skills": rp.get("skills") or [],
+            "projects": [p.get("title") for p in (rp.get("projects") or [])][:5],
+            "years": rp.get("years"),
+            "llm_summary": rp.get("llm_summary") or "",
+            "warnings": rp.get("warnings") or [],
+        },
+        "prior_report": {
+            "source_id": pr.get("source_id"),
+            "overall": pr.get("overall"),
+            "insufficient_dims": pr.get("insufficient_dims") or [],
+            "probe_points": pr.get("probe_points") or [],
+        } if pr else {},
+    }
+
     # 落库维度分（方便列表页直接读）
     db.save_dimension_scores(iid, scored["dimensions"])
 
@@ -185,6 +217,9 @@ def build_report(iid: str) -> dict:
         "timeline": _timeline(ctx["turns"], ctx["analyses"]),
         "pacing": pacing,
         "cost": cost,
+        # 预算熔断与材料来源：这两块让报告能自证"我们是怎么花的钱、凭的什么材料"
+        "budget": budget,
+        "material": material,
         "provider": row.get("provider"),
         "limitations": LIMITATIONS,
         "generated_at": time.time(),
