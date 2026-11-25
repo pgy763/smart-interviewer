@@ -1,6 +1,6 @@
 """端到端 API 流程验证（mock 通道，不需要任何模型 Key）。
 
-跑法： /d/Soft/conda/python.exe tools/e2e_api.py
+跑法： python tools/e2e_api.py
 它做四件事：
   1. 建一场面试（4 题，追问上限 1）
   2. 逐题作答，中间插入带人脸 / 不带人脸的帧

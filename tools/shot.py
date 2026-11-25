@@ -4,7 +4,7 @@
 Edge 自带 DevTools 协议，websocket-client 已装，够用。
 
 运行：
-    /d/Soft/conda/python.exe tools/shot.py
+    python tools/shot.py
 需要 danger-full-access（要 spawn Edge 子进程）。
 
 注意：摄像头用 `--use-fake-device-for-media-stream` 假装有一个，

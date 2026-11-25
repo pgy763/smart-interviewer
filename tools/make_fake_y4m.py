@@ -12,7 +12,7 @@
 注意这只是**测试替身**：它证明"抓帧 → 上传 → 服务端分析 → 落库 → 徽标"
 这条链路是通的，不证明真人识别准确率。
 
-运行：/d/Soft/conda/python.exe tools/make_fake_y4m.py
+运行：python tools/make_fake_y4m.py
 输出：tools/fake_face.y4m（默认 8 秒 × 15fps）
 """
 
