@@ -40,10 +40,13 @@
 ## 快速开始
 
 ```bash
-cd D:\Github-code\smart-interviewer
+cd smart-interviewer
 
-# 1) 起服务（不需要任何 Key）
-D:\Soft\conda\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8090
+# 0) 装依赖（版本是本机实测跑通的，见 requirements.txt）
+pip install -r requirements.txt
+
+# 1) 起服务（不需要任何 Key，走 mock 通道）
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8090
 
 # 2) 打开控制台
 #    http://127.0.0.1:8090/
@@ -62,7 +65,7 @@ D:\Soft\conda\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8090
 
 ```powershell
 $env:DASHSCOPE_API_KEY = "sk-xxxx"
-D:\Soft\conda\python.exe -m uvicorn app.main:app --port 8090
+python -m uvicorn app.main:app --port 8090
 ```
 
 控制台顶部会从 `provider: mock` 变成 `provider: dashscope`。
@@ -268,13 +271,13 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8090
 
 ```bash
 # 单元测试（19 个用例：四类兜底 + 评分规则 + 视觉 + 音频）
-D:\Soft\conda\python.exe -m unittest discover -s tests -v
+python -m unittest discover -s tests -v
 
 # 端到端 API 断言（51 项）
-D:\Soft\conda\python.exe tools/e2e_api.py
+python tools/e2e_api.py
 
 # 截图回归（7 张，含深色模式）
-D:\Soft\conda\python.exe tools/shot.py
+python tools/shot.py
 ```
 
 实测输出：单元测试 `Ran 19 tests ... OK`；端到端 `PASS=51 FAIL=0`；
